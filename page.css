@@ -1,0 +1,2 @@
+::highlight(read-ahead) { background-color: #f3d67a; color: #182b3a; }
+#read-ahead-panel { all: initial; position: fixed; inset: 12px 12px auto; z-index: 2147483647; }
