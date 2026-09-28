@@ -121,7 +121,7 @@ node check.mjs --firefox    # только Firefox; есть и --chromium
 Проверка манифеста:
 
 ```sh
-web-ext lint --source-dir . --ignore-files 'dist/**' 'test-results/**' 'check.mjs' 'package.py' 'icon.svg'
+web-ext lint --source-dir . --ignore-files 'dist/**' 'test-results/**' 'server/**' '.gitmodules' 'check.mjs' 'package.py' 'icon.svg'
 ```
 
 Предупреждение `BACKGROUND_SERVICE_WORKER_IGNORED` ожидаемо: Firefox
