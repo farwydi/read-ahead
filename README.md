@@ -12,6 +12,9 @@
 например [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp),
 с зарегистрированным голосом `russian`.
 
+Серверная часть находится в [server/](server/README.md): закреплённые исходники,
+Ansible-сборка и готовые бинарные архивы в релизах `server-v*`.
+
 ## Установка
 
 **Firefox 142+**: скачать

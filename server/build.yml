@@ -1,0 +1,126 @@
+---
+- name: Build Read Ahead server release on Debian 13
+  hosts: all
+  gather_facts: true
+  vars:
+    server_version: "0.1.0"
+    archive_name: read-ahead-server-{{ server_version }}-linux-amd64.tar.gz
+  tasks:
+    - name: Check release build platform
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Debian'
+          - ansible_facts.distribution_major_version == '13'
+          - ansible_facts.architecture == 'x86_64'
+          - server_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+
+    - name: Read pinned upstream revision from submodule
+      ansible.builtin.command:
+        argv: [git, -C, "{{ playbook_dir }}/qwentts.cpp", rev-parse, HEAD]
+      delegate_to: localhost
+      become: false
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      register: upstream
+      changed_when: false
+
+    - name: Install build dependencies
+      ansible.builtin.apt:
+        name: [ca-certificates, git, cmake, g++, make, pkg-config, libvulkan-dev, glslc, spirv-headers, glslang-tools]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create temporary build directory
+      ansible.builtin.tempfile:
+        state: directory
+        path: /var/tmp
+        prefix: read-ahead-server-build-
+      register: build_dir
+
+    - name: Build and fetch release archive
+      block:
+        - name: Checkout pinned runtime and ggml
+          ansible.builtin.git:
+            repo: https://github.com/ServeurpersoCom/qwentts.cpp.git
+            dest: "{{ build_dir.path }}/source"
+            version: "{{ upstream.stdout }}"
+            recursive: true
+
+        - name: Configure static ggml with CPU AVX2 and Vulkan
+          ansible.builtin.command:
+            argv:
+              - cmake
+              - -S
+              - "{{ build_dir.path }}/source"
+              - -B
+              - "{{ build_dir.path }}/build"
+              - -DCMAKE_BUILD_TYPE=Release
+              - -DBUILD_SHARED_LIBS=OFF
+              - -DGGML_VULKAN=ON
+              - -DGGML_NATIVE=OFF
+              - -DGGML_AVX2=ON
+              - -DGGML_FMA=ON
+              - -DGGML_F16C=ON
+
+        - name: Build native server and ABI check
+          ansible.builtin.command:
+            argv: [cmake, --build, "{{ build_dir.path }}/build", --target, tts-server, test-abi-c, --parallel, "2"]
+
+        - name: Check native ABI
+          ansible.builtin.command: "{{ build_dir.path }}/build/test-abi-c"
+          changed_when: false
+
+        - name: Create release staging directories
+          ansible.builtin.file:
+            path: "{{ build_dir.path }}/package/{{ item }}"
+            state: directory
+            mode: "0755"
+          loop: ["", licenses]
+
+        - name: Stage upstream runtime and licenses
+          ansible.builtin.copy:
+            src: "{{ build_dir.path }}/{{ item.src }}"
+            dest: "{{ build_dir.path }}/package/{{ item.dest }}"
+            remote_src: true
+            mode: "{{ item.mode | default('0644') }}"
+          loop:
+            - {src: build/tts-server, dest: tts-server, mode: "0755"}
+            - {src: source/docker/entrypoint.sh, dest: entrypoint.sh, mode: "0755"}
+            - {src: source/LICENSE, dest: licenses/qwentts.cpp.txt}
+            - {src: source/ggml/LICENSE, dest: licenses/ggml.txt}
+            - {src: source/vendor/cpp-httplib/LICENSE, dest: licenses/cpp-httplib.txt}
+
+        - name: Stage yyjson license from its source header
+          ansible.builtin.copy:
+            content: "{{ lookup('ansible.builtin.file', playbook_dir + '/qwentts.cpp/vendor/yyjson/yyjson.c').split('*/', 1)[0] }}*/\n"
+            dest: "{{ build_dir.path }}/package/licenses/yyjson.txt"
+            mode: "0644"
+
+        - name: Stage HTTP check and server documentation
+          ansible.builtin.copy:
+            src: "{{ item }}"
+            dest: "{{ build_dir.path }}/package/{{ item }}"
+            mode: "0644"
+          loop: [verify.py, README.md]
+
+        - name: Record release provenance
+          ansible.builtin.copy:
+            content: "{{ {'version': server_version, 'qwentts_revision': upstream.stdout, 'platform': 'Debian 13 amd64, AVX2/FMA/F16C, Vulkan', 'ggml_linkage': 'static'} | to_nice_json }}\n"
+            dest: "{{ build_dir.path }}/package/build.json"
+            mode: "0644"
+
+        - name: Create server archive
+          ansible.builtin.command:
+            argv: [tar, --sort=name, --mtime=@0, --owner=0, --group=0, --numeric-owner, -czf, "{{ build_dir.path }}/{{ archive_name }}", -C, "{{ build_dir.path }}/package", .]
+
+        - name: Fetch server release to local dist directory
+          ansible.builtin.fetch:
+            src: "{{ build_dir.path }}/{{ archive_name }}"
+            dest: "{{ playbook_dir }}/../dist/{{ archive_name }}"
+            flat: true
+      always:
+        - name: Remove temporary build directory
+          ansible.builtin.file:
+            path: "{{ build_dir.path }}"
+            state: absent
